@@ -1,11 +1,13 @@
 mod aggregator;
 mod alert;
 mod config;
+mod menubar;
 mod output;
 mod sources;
 
 use anyhow::Result;
 use clap::{Parser, Subcommand};
+use std::sync::{Arc, Mutex};
 use tokio::time::{interval, Duration};
 
 /// Embedded icon — compiled into the binary at build time.
@@ -60,7 +62,6 @@ async fn main() -> Result<()> {
     let cli = Cli::parse();
     let mut cfg = config::load()?;
 
-    // Ensure the bundled icon is extracted; use it as default if none configured.
     let icon_path = ensure_icon();
     if cfg.notification_icon.is_none() {
         cfg.notification_icon = Some(icon_path.to_string_lossy().into_owned());
@@ -84,14 +85,27 @@ async fn main() -> Result<()> {
                 cfg.interval_secs,
                 cfg.output_path.display()
             );
-            run_daemon(cfg).await?;
+
+            // Shared state between background tokio thread and main-thread menu bar
+            let data: Arc<Mutex<menubar::MenuBarData>> =
+                Arc::new(Mutex::new(menubar::MenuBarData::default()));
+            let data_bg = data.clone();
+
+            // Tokio daemon runs in a background OS thread so the main thread stays free for NSRunLoop
+            std::thread::spawn(move || {
+                let rt = tokio::runtime::Runtime::new().expect("tokio runtime");
+                rt.block_on(run_daemon(cfg, data_bg));
+            });
+
+            // Blocks forever — runs NSRunLoop + updates NSStatusItem
+            menubar::run(data);
         }
     }
 
     Ok(())
 }
 
-async fn run_daemon(cfg: config::Config) -> Result<()> {
+async fn run_daemon(cfg: config::Config, data: Arc<Mutex<menubar::MenuBarData>>) {
     let mut ticker = interval(Duration::from_secs(cfg.interval_secs));
     let mut alert_state = alert::AlertState::default();
 
@@ -99,6 +113,19 @@ async fn run_daemon(cfg: config::Config) -> Result<()> {
         ticker.tick().await;
         match aggregator::snapshot(&cfg).await {
             Ok(snap) => {
+                // Update menu bar data
+                {
+                    let mut d = data.lock().unwrap();
+                    d.session_pct = snap.session.utilization_pct;
+                    d.weekly_pct = snap.weekly.utilization_pct;
+                    d.session_over = snap.session.utilization_pct
+                        .map(|p| p >= cfg.alert_pct_session)
+                        .unwrap_or(false);
+                    d.weekly_over = snap.weekly.utilization_pct
+                        .map(|p| p >= cfg.alert_pct_weekly)
+                        .unwrap_or(false);
+                }
+
                 output::print_snapshot(&snap, &cfg);
                 if let Err(e) = output::write_json(&snap, &cfg) {
                     tracing::error!("Failed to write JSON: {e}");
@@ -107,7 +134,9 @@ async fn run_daemon(cfg: config::Config) -> Result<()> {
                     tracing::error!("Alert error: {e}");
                 }
             }
-            Err(e) => tracing::error!("Snapshot failed: {e}"),
+            Err(e) => {
+                tracing::error!("Snapshot failed: {e}");
+            }
         }
     }
 }
