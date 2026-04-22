@@ -1,7 +1,7 @@
 use anyhow::Result;
 use notify_rust::Notification;
 
-use crate::aggregator::Snapshot;
+use crate::aggregator::{Snapshot, UsageSummary};
 use crate::config::Config;
 
 pub fn notify_mac(title: &str, body: &str) -> Result<()> {
@@ -13,15 +13,24 @@ pub fn notify_mac(title: &str, body: &str) -> Result<()> {
     Ok(())
 }
 
-pub async fn maybe_notify(snap: &Snapshot, cfg: &Config) -> Result<()> {
-    let session_total = snap.session.total_tokens;
-    let weekly_total = snap.weekly.total_tokens;
+/// Percentage to use for alerting. Prefer Claude-reported utilization; fall back to
+/// local-tokens-vs-threshold ratio.
+fn effective_pct(summary: &UsageSummary, token_threshold: u64) -> f64 {
+    if let Some(p) = summary.utilization_pct {
+        return p;
+    }
+    if token_threshold == 0 {
+        return 0.0;
+    }
+    summary.total_tokens as f64 / token_threshold as f64 * 100.0
+}
 
-    if session_total >= cfg.session_token_alert {
-        let msg = format!(
-            "Session: {} tokens (in: {}, out: {})",
-            session_total, snap.session.input_tokens, snap.session.output_tokens
-        );
+pub async fn maybe_notify(snap: &Snapshot, cfg: &Config) -> Result<()> {
+    let session_pct = effective_pct(&snap.session, cfg.session_token_alert);
+    let weekly_pct = effective_pct(&snap.weekly, cfg.weekly_token_alert);
+
+    if session_pct >= cfg.alert_pct_session {
+        let msg = format!("Session at {:.1}% used", session_pct);
         tracing::warn!("Session threshold hit: {msg}");
         if let Err(e) = notify_mac("Claude Usage Alert — Session", &msg) {
             tracing::error!("macOS notification failed: {e}");
@@ -31,11 +40,8 @@ pub async fn maybe_notify(snap: &Snapshot, cfg: &Config) -> Result<()> {
         }
     }
 
-    if weekly_total >= cfg.weekly_token_alert {
-        let msg = format!(
-            "Weekly: {} tokens (in: {}, out: {})",
-            weekly_total, snap.weekly.input_tokens, snap.weekly.output_tokens
-        );
+    if weekly_pct >= cfg.alert_pct_weekly {
+        let msg = format!("Weekly at {:.1}% used", weekly_pct);
         tracing::warn!("Weekly threshold hit: {msg}");
         if let Err(e) = notify_mac("Claude Usage Alert — Weekly", &msg) {
             tracing::error!("macOS notification failed: {e}");

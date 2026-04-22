@@ -1,5 +1,5 @@
 use anyhow::Result;
-use chrono::Utc;
+use chrono::{Local, Utc};
 
 use crate::aggregator::{Snapshot, UsageSummary};
 use crate::config::Config;
@@ -51,41 +51,91 @@ fn pct(tokens: u64, threshold: u64) -> f64 {
 
 fn reset_label(summary: &UsageSummary) -> String {
     match summary.reset_at {
-        None => "no activity".to_string(),
+        None => "no active window".to_string(),
         Some(t) => {
             let secs = (t - Utc::now()).num_seconds();
-            format!("resets in {}", format_duration_hm(secs))
+            let local = t.with_timezone(&Local);
+            format!(
+                "resets in {} ({})",
+                format_duration_hm(secs),
+                local.format("%a %H:%M %Z")
+            )
         }
     }
 }
 
+fn window_start_label(summary: &UsageSummary) -> String {
+    match summary.window_start {
+        None => "—".to_string(),
+        Some(t) => {
+            let local = t.with_timezone(&Local);
+            local.format("%Y-%m-%d %H:%M %Z").to_string()
+        }
+    }
+}
+
+fn fmt_n(n: u64) -> String {
+    // Thousands separator for readability
+    let s = n.to_string();
+    let bytes = s.as_bytes();
+    let mut out = String::with_capacity(s.len() + s.len() / 3);
+    for (i, b) in bytes.iter().enumerate() {
+        if i > 0 && (bytes.len() - i) % 3 == 0 {
+            out.push(',');
+        }
+        out.push(*b as char);
+    }
+    out
+}
+
+fn primary_pct_label(summary: &UsageSummary, fallback_threshold: u64) -> String {
+    match summary.utilization_pct {
+        Some(p) => format!("{:5.1}% (Claude)", p),
+        None => format!(
+            "{:5.1}% of {}",
+            pct(summary.total_tokens, fallback_threshold),
+            fmt_n(fallback_threshold)
+        ),
+    }
+}
+
 pub fn print_snapshot(snap: &Snapshot, cfg: &Config) {
+    let captured_local = snap.captured_at.with_timezone(&Local);
     println!(
-        "=== Claude Usage  {}  ===",
-        snap.captured_at.format("%Y-%m-%d %H:%M:%S UTC")
+        "=== Claude Usage  {}  [source: {}]  ===",
+        captured_local.format("%Y-%m-%d %H:%M:%S %Z"),
+        snap.source,
     );
 
     let s = &snap.session;
     println!(
-        "Session (5h)  {:>8} tok  in={:>8}  out={:>8}  cache={:>8}  {:5.1}% of {:>7}  {}",
-        s.total_tokens,
-        s.input_tokens,
-        s.output_tokens,
-        s.cache_read_tokens,
-        pct(s.total_tokens, cfg.session_token_alert),
-        cfg.session_token_alert,
+        "Session (5h)   {}   {}",
+        primary_pct_label(s, cfg.session_token_alert),
         reset_label(s),
+    );
+    println!(
+        "               local tokens: total={}  in={}  out={}  cache_create={}  cache_read={}  window_start={}",
+        fmt_n(s.total_tokens),
+        fmt_n(s.input_tokens),
+        fmt_n(s.output_tokens),
+        fmt_n(s.cache_creation_tokens),
+        fmt_n(s.cache_read_tokens),
+        window_start_label(s),
     );
 
     let w = &snap.weekly;
     println!(
-        "Weekly  (7d)  {:>8} tok  in={:>8}  out={:>8}  cache={:>8}  {:5.1}% of {:>7}  {}",
-        w.total_tokens,
-        w.input_tokens,
-        w.output_tokens,
-        w.cache_read_tokens,
-        pct(w.total_tokens, cfg.weekly_token_alert),
-        cfg.weekly_token_alert,
+        "Weekly  (7d)   {}   {}",
+        primary_pct_label(w, cfg.weekly_token_alert),
         reset_label(w),
+    );
+    println!(
+        "               local tokens: total={}  in={}  out={}  cache_create={}  cache_read={}  window_start={}",
+        fmt_n(w.total_tokens),
+        fmt_n(w.input_tokens),
+        fmt_n(w.output_tokens),
+        fmt_n(w.cache_creation_tokens),
+        fmt_n(w.cache_read_tokens),
+        window_start_label(w),
     );
 }

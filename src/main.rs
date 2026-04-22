@@ -43,7 +43,7 @@ async fn main() -> Result<()> {
 
     match cli.command.unwrap_or(Command::Daemon) {
         Command::Status => {
-            let snap = aggregator::snapshot().await?;
+            let snap = aggregator::snapshot(&cfg).await?;
             output::print_snapshot(&snap, &cfg);
         }
         Command::Config => {
@@ -67,7 +67,7 @@ async fn run_daemon(cfg: config::Config) -> Result<()> {
 
     loop {
         ticker.tick().await;
-        match aggregator::snapshot().await {
+        match aggregator::snapshot(&cfg).await {
             Ok(snap) => {
                 output::print_snapshot(&snap, &cfg);
                 if let Err(e) = output::write_json(&snap, &cfg) {
