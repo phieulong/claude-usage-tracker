@@ -80,6 +80,10 @@ pub struct NotifRequest {
 pub fn run(data: Arc<Mutex<MenuBarData>>, notif_rx: Receiver<NotifRequest>) -> ! {
     let mtm = MainThreadMarker::new().expect("menubar::run must be called from the main thread");
 
+    // Set the notification app bundle BEFORE any notification is delivered.
+    // This prevents mac-notification-sys from showing a "Choose Application" dialog.
+    let _ = mac_notification_sys::set_application("com.apple.Terminal");
+
     let app = NSApplication::sharedApplication(mtm);
     app.setActivationPolicy(NSApplicationActivationPolicy::Accessory);
 
