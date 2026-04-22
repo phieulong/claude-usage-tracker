@@ -2,12 +2,13 @@ use objc2::rc::Retained;
 use objc2::runtime::AnyObject;
 use objc2_app_kit::{
     NSApplication, NSApplicationActivationPolicy,
+    NSBaselineOffsetAttributeName,
     NSColor, NSFont, NSFontAttributeName, NSForegroundColorAttributeName,
     NSMutableParagraphStyle, NSParagraphStyleAttributeName,
     NSStatusBar, NSStatusBarButton, NSStatusItem,
 };
 use objc2_foundation::{
-    MainThreadMarker, NSAttributedString, NSDate, NSMutableAttributedString, NSRange,
+    MainThreadMarker, NSAttributedString, NSDate, NSMutableAttributedString, NSNumber, NSRange,
     NSRunLoop, NSString,
 };
 use std::sync::{Arc, Mutex};
@@ -61,19 +62,22 @@ fn build_title(data: &MenuBarData) -> Retained<NSAttributedString> {
     let green_any: &AnyObject = &*green;
 
     // Regular font for suffix text, bold for percentage part
-    let regular: Retained<NSFont> = NSFont::systemFontOfSize(9.0);
-    let bold: Retained<NSFont> = NSFont::boldSystemFontOfSize(9.0);
+    let regular: Retained<NSFont> = NSFont::systemFontOfSize(10.5);
+    let bold: Retained<NSFont> = NSFont::boldSystemFontOfSize(10.5);
     let regular_any: &AnyObject = &*regular;
     let bold_any: &AnyObject = &*bold;
     let total_len = full.encode_utf16().count();
 
     // Paragraph style applied to the FULL string (must be consistent within each paragraph).
-    // maximumLineHeight=10 + paragraphSpacingBefore=1 → 2*(1+10) = 22pt = menu bar height → centered.
+    // Line boxes are top-aligned inside NSStatusBarButton; a negative baseline offset then
+    // shifts the glyphs downward within each box so the two lines sit centered vertically.
     let para = NSMutableParagraphStyle::new();
-    para.setParagraphSpacingBefore(1.0);
-    para.setMaximumLineHeight(10.0);
-    para.setMinimumLineHeight(10.0);
+    para.setMaximumLineHeight(12.0);
+    para.setMinimumLineHeight(12.0);
     let para_any: &AnyObject = &*para;
+
+    let baseline_offset = NSNumber::new_f64(-7.0);
+    let baseline_any: &AnyObject = &*baseline_offset;
 
     unsafe {
         // Paragraph style across entire string (safe: consistent per paragraph)
@@ -86,6 +90,12 @@ fn build_title(data: &MenuBarData) -> Retained<NSAttributedString> {
         mstr.addAttribute_value_range(
             NSFontAttributeName,
             regular_any,
+            NSRange { location: 0, length: total_len },
+        );
+        // Shift glyphs downward so the two lines sit centered in the menu bar.
+        mstr.addAttribute_value_range(
+            NSBaselineOffsetAttributeName,
+            baseline_any,
             NSRange { location: 0, length: total_len },
         );
         // Bold for S:xx%
