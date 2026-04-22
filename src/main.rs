@@ -64,6 +64,7 @@ async fn main() -> Result<()> {
 
 async fn run_daemon(cfg: config::Config) -> Result<()> {
     let mut ticker = interval(Duration::from_secs(cfg.interval_secs));
+    let mut alert_state = alert::AlertState::default();
 
     loop {
         ticker.tick().await;
@@ -73,7 +74,7 @@ async fn run_daemon(cfg: config::Config) -> Result<()> {
                 if let Err(e) = output::write_json(&snap, &cfg) {
                     tracing::error!("Failed to write JSON: {e}");
                 }
-                if let Err(e) = alert::maybe_notify(&snap, &cfg).await {
+                if let Err(e) = alert::maybe_notify(&snap, &cfg, &mut alert_state).await {
                     tracing::error!("Alert error: {e}");
                 }
             }
