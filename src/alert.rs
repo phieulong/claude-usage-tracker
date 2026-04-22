@@ -1,8 +1,9 @@
 use anyhow::Result;
-use notify_rust::Notification;
 
 use crate::aggregator::{Snapshot, UsageSummary};
 use crate::config::Config;
+
+// ...existing code...
 
 /// Tracks the last percentage level at which an alert was fired for each period.
 /// Resets to None when utilization drops back below the configured threshold.
@@ -12,12 +13,15 @@ pub struct AlertState {
     pub weekly_last_notified: Option<i64>,
 }
 
-pub fn notify_mac(title: &str, body: &str) -> Result<()> {
-    Notification::new()
-        .summary(title)
-        .body(body)
-        .sound_name("Sosumi")
-        .show()?;
+pub fn notify_mac(title: &str, body: &str, icon: Option<&str>) -> Result<()> {
+    use mac_notification_sys::Notification;
+
+    let mut n = Notification::new();
+    n.title(title).message(body).sound("Sosumi").asynchronous(true);
+    if let Some(path) = icon {
+        n.app_icon(path);
+    }
+    n.send().map_err(|e| anyhow::anyhow!("notification error: {e:?}"))?;
     Ok(())
 }
 
@@ -56,7 +60,7 @@ pub async fn maybe_notify(snap: &Snapshot, cfg: &Config, state: &mut AlertState)
     if should_alert(session_pct, cfg.alert_pct_session, &mut state.session_last_notified) {
         let msg = format!("Session at {:.1}% used", session_pct);
         tracing::warn!("Session threshold hit: {msg}");
-        if let Err(e) = notify_mac("Claude Usage Alert — Session", &msg) {
+        if let Err(e) = notify_mac("Claude Usage Alert — Session", &msg, cfg.notification_icon.as_deref()) {
             tracing::error!("macOS notification failed: {e}");
         }
         if let Some(url) = &cfg.webhook_url {
@@ -67,7 +71,7 @@ pub async fn maybe_notify(snap: &Snapshot, cfg: &Config, state: &mut AlertState)
     if should_alert(weekly_pct, cfg.alert_pct_weekly, &mut state.weekly_last_notified) {
         let msg = format!("Weekly at {:.1}% used", weekly_pct);
         tracing::warn!("Weekly threshold hit: {msg}");
-        if let Err(e) = notify_mac("Claude Usage Alert — Weekly", &msg) {
+        if let Err(e) = notify_mac("Claude Usage Alert — Weekly", &msg, cfg.notification_icon.as_deref()) {
             tracing::error!("macOS notification failed: {e}");
         }
         if let Some(url) = &cfg.webhook_url {

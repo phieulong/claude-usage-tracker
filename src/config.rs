@@ -16,6 +16,12 @@ pub struct Config {
     /// Optional webhook URL for Slack/Discord notifications
     pub webhook_url: Option<String>,
 
+    /// Optional path to a .png or .icns file used as the notification icon.
+    /// Shows as the left-side app_icon in macOS notifications.
+    /// Example: "/Users/you/Pictures/claude.png"
+    #[serde(default)]
+    pub notification_icon: Option<String>,
+
     /// Output JSON file path
     pub output_path: PathBuf,
 }
@@ -27,6 +33,7 @@ impl Default for Config {
             alert_pct_session: 80.0,
             alert_pct_weekly: 80.0,
             webhook_url: None,
+            notification_icon: None, // set at runtime from bundled binary
             output_path: dirs::home_dir()
                 .unwrap_or_else(|| PathBuf::from("."))
                 .join(".claude")

@@ -8,6 +8,29 @@ use anyhow::Result;
 use clap::{Parser, Subcommand};
 use tokio::time::{interval, Duration};
 
+/// Embedded icon — compiled into the binary at build time.
+const ICON_BYTES: &[u8] = include_bytes!("../claude_ai_icon.jpg");
+const ICON_FILENAME: &str = "claude_ai_icon.jpg";
+
+/// Extract the bundled icon to `~/.claude/claude_ai_icon.jpg` if not already there.
+/// Returns the path to the icon file.
+fn ensure_icon() -> std::path::PathBuf {
+    let dest = dirs::home_dir()
+        .unwrap_or_else(|| std::path::PathBuf::from("."))
+        .join(".claude")
+        .join(ICON_FILENAME);
+
+    if !dest.exists() {
+        if let Some(parent) = dest.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+        if let Err(e) = std::fs::write(&dest, ICON_BYTES) {
+            tracing::warn!("Could not extract bundled icon to {}: {e}", dest.display());
+        }
+    }
+    dest
+}
+
 #[derive(Parser)]
 #[command(name = "claude-usage-tracker")]
 #[command(about = "Track Claude Code token usage by session and weekly period")]
@@ -36,6 +59,12 @@ async fn main() -> Result<()> {
 
     let cli = Cli::parse();
     let mut cfg = config::load()?;
+
+    // Ensure the bundled icon is extracted; use it as default if none configured.
+    let icon_path = ensure_icon();
+    if cfg.notification_icon.is_none() {
+        cfg.notification_icon = Some(icon_path.to_string_lossy().into_owned());
+    }
 
     if let Some(secs) = cli.interval {
         cfg.interval_secs = secs;
