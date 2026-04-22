@@ -9,6 +9,8 @@ use objc2_foundation::{
     NSString,
 };
 use std::sync::{Arc, Mutex};
+use std::sync::mpsc::Receiver;
+
 
 /// State shared between the daemon thread and the menu bar.
 #[derive(Clone, Default)]
@@ -65,9 +67,17 @@ fn build_title(data: &MenuBarData) -> Retained<NSAttributedString> {
     Retained::into_super(mstr)
 }
 
+/// Notification request sent from the daemon thread to be delivered on the main thread.
+pub struct NotifRequest {
+    pub title: String,
+    pub body: String,
+    pub icon: Option<String>,
+}
+
 /// Run the macOS menu bar status item on the **main thread**.
 /// Blocks forever — call this as the final step of `main()`.
-pub fn run(data: Arc<Mutex<MenuBarData>>) -> ! {
+/// `notif_rx` receives notification requests from the background daemon thread.
+pub fn run(data: Arc<Mutex<MenuBarData>>, notif_rx: Receiver<NotifRequest>) -> ! {
     let mtm = MainThreadMarker::new().expect("menubar::run must be called from the main thread");
 
     let app = NSApplication::sharedApplication(mtm);
@@ -82,9 +92,18 @@ pub fn run(data: Arc<Mutex<MenuBarData>>) -> ! {
     }
 
     loop {
+        // Pump the run loop for 0.5 s
         let until = NSDate::dateWithTimeIntervalSinceNow(0.5);
         NSRunLoop::mainRunLoop().runUntilDate(&until);
 
+        // Drain all pending notification requests (sent from daemon thread)
+        while let Ok(req) = notif_rx.try_recv() {
+            if let Err(e) = crate::alert::notify_mac(&req.title, &req.body, req.icon.as_deref()) {
+                tracing::error!("macOS notification failed: {e}");
+            }
+        }
+
+        // Update menu bar label
         let current = data.lock().unwrap().clone();
         if let Some(btn) = item.button(mtm) {
             let btn: &NSStatusBarButton = &btn;

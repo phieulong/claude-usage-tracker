@@ -91,21 +91,28 @@ async fn main() -> Result<()> {
                 Arc::new(Mutex::new(menubar::MenuBarData::default()));
             let data_bg = data.clone();
 
+            // Channel: daemon thread sends notification requests → main thread delivers them
+            let (notif_tx, notif_rx) = std::sync::mpsc::channel::<menubar::NotifRequest>();
+
             // Tokio daemon runs in a background OS thread so the main thread stays free for NSRunLoop
             std::thread::spawn(move || {
                 let rt = tokio::runtime::Runtime::new().expect("tokio runtime");
-                rt.block_on(run_daemon(cfg, data_bg));
+                rt.block_on(run_daemon(cfg, data_bg, notif_tx));
             });
 
-            // Blocks forever — runs NSRunLoop + updates NSStatusItem
-            menubar::run(data);
+            // Blocks forever — runs NSRunLoop + updates NSStatusItem + delivers notifications
+            menubar::run(data, notif_rx);
         }
     }
 
     Ok(())
 }
 
-async fn run_daemon(cfg: config::Config, data: Arc<Mutex<menubar::MenuBarData>>) {
+async fn run_daemon(
+    cfg: config::Config,
+    data: Arc<Mutex<menubar::MenuBarData>>,
+    notif_tx: std::sync::mpsc::Sender<menubar::NotifRequest>,
+) {
     let mut ticker = interval(Duration::from_secs(cfg.interval_secs));
     let mut alert_state = alert::AlertState::default();
 
@@ -130,7 +137,7 @@ async fn run_daemon(cfg: config::Config, data: Arc<Mutex<menubar::MenuBarData>>)
                 if let Err(e) = output::write_json(&snap, &cfg) {
                     tracing::error!("Failed to write JSON: {e}");
                 }
-                if let Err(e) = alert::maybe_notify(&snap, &cfg, &mut alert_state).await {
+                if let Err(e) = alert::maybe_notify(&snap, &cfg, &mut alert_state, &notif_tx).await {
                     tracing::error!("Alert error: {e}");
                 }
             }
