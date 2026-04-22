@@ -24,6 +24,13 @@ pub struct Config {
 
     /// Output JSON file path
     pub output_path: PathBuf,
+
+    /// Optional claude.ai session key (`sessionKey` cookie).
+    /// When set, the daemon prefers the claude.ai web API over the CLI OAuth
+    /// endpoint, which lets web-only users track usage without installing
+    /// Claude Code CLI.
+    #[serde(default)]
+    pub session_cookie: Option<String>,
 }
 
 impl Default for Config {
@@ -38,6 +45,7 @@ impl Default for Config {
                 .unwrap_or_else(|| PathBuf::from("."))
                 .join(".claude")
                 .join("usage-tracker.json"),
+            session_cookie: None,
         }
     }
 }
