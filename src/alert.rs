@@ -13,21 +13,13 @@ pub fn notify_mac(title: &str, body: &str) -> Result<()> {
     Ok(())
 }
 
-/// Percentage to use for alerting. Prefer Claude-reported utilization; fall back to
-/// local-tokens-vs-threshold ratio.
-fn effective_pct(summary: &UsageSummary, token_threshold: u64) -> f64 {
-    if let Some(p) = summary.utilization_pct {
-        return p;
-    }
-    if token_threshold == 0 {
-        return 0.0;
-    }
-    summary.total_tokens as f64 / token_threshold as f64 * 100.0
+fn effective_pct(summary: &UsageSummary) -> f64 {
+    summary.utilization_pct.unwrap_or(0.0)
 }
 
 pub async fn maybe_notify(snap: &Snapshot, cfg: &Config) -> Result<()> {
-    let session_pct = effective_pct(&snap.session, cfg.session_token_alert);
-    let weekly_pct = effective_pct(&snap.weekly, cfg.weekly_token_alert);
+    let session_pct = effective_pct(&snap.session);
+    let weekly_pct = effective_pct(&snap.weekly);
 
     if session_pct >= cfg.alert_pct_session {
         let msg = format!("Session at {:.1}% used", session_pct);

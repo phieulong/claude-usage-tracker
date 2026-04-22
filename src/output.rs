@@ -42,13 +42,6 @@ fn format_duration_hm(secs: i64) -> String {
     }
 }
 
-fn pct(tokens: u64, threshold: u64) -> f64 {
-    if threshold == 0 {
-        return 0.0;
-    }
-    tokens as f64 / threshold as f64 * 100.0
-}
-
 fn reset_label(summary: &UsageSummary) -> String {
     match summary.reset_at {
         None => "no active window".to_string(),
@@ -64,78 +57,27 @@ fn reset_label(summary: &UsageSummary) -> String {
     }
 }
 
-fn window_start_label(summary: &UsageSummary) -> String {
-    match summary.window_start {
-        None => "—".to_string(),
-        Some(t) => {
-            let local = t.with_timezone(&Local);
-            local.format("%Y-%m-%d %H:%M %Z").to_string()
-        }
-    }
-}
-
-fn fmt_n(n: u64) -> String {
-    // Thousands separator for readability
-    let s = n.to_string();
-    let bytes = s.as_bytes();
-    let mut out = String::with_capacity(s.len() + s.len() / 3);
-    for (i, b) in bytes.iter().enumerate() {
-        if i > 0 && (bytes.len() - i) % 3 == 0 {
-            out.push(',');
-        }
-        out.push(*b as char);
-    }
-    out
-}
-
-fn primary_pct_label(summary: &UsageSummary, fallback_threshold: u64) -> String {
+fn primary_pct_label(summary: &UsageSummary) -> String {
     match summary.utilization_pct {
-        Some(p) => format!("{:5.1}% (Claude)", p),
-        None => format!(
-            "{:5.1}% of {}",
-            pct(summary.total_tokens, fallback_threshold),
-            fmt_n(fallback_threshold)
-        ),
+        Some(p) => format!("{:5.1}%", p),
+        None => "  n/a%".to_string(),
     }
 }
 
-pub fn print_snapshot(snap: &Snapshot, cfg: &Config) {
+pub fn print_snapshot(snap: &Snapshot, _cfg: &Config) {
     let captured_local = snap.captured_at.with_timezone(&Local);
     println!(
-        "=== Claude Usage  {}  [source: {}]  ===",
+        "=== Claude Usage  {}  ===",
         captured_local.format("%Y-%m-%d %H:%M:%S %Z"),
-        snap.source,
     );
-
-    let s = &snap.session;
     println!(
         "Session (5h)   {}   {}",
-        primary_pct_label(s, cfg.session_token_alert),
-        reset_label(s),
+        primary_pct_label(&snap.session),
+        reset_label(&snap.session),
     );
-    println!(
-        "               local tokens: total={}  in={}  out={}  cache_create={}  cache_read={}  window_start={}",
-        fmt_n(s.total_tokens),
-        fmt_n(s.input_tokens),
-        fmt_n(s.output_tokens),
-        fmt_n(s.cache_creation_tokens),
-        fmt_n(s.cache_read_tokens),
-        window_start_label(s),
-    );
-
-    let w = &snap.weekly;
     println!(
         "Weekly  (7d)   {}   {}",
-        primary_pct_label(w, cfg.weekly_token_alert),
-        reset_label(w),
-    );
-    println!(
-        "               local tokens: total={}  in={}  out={}  cache_create={}  cache_read={}  window_start={}",
-        fmt_n(w.total_tokens),
-        fmt_n(w.input_tokens),
-        fmt_n(w.output_tokens),
-        fmt_n(w.cache_creation_tokens),
-        fmt_n(w.cache_read_tokens),
-        window_start_label(w),
+        primary_pct_label(&snap.weekly),
+        reset_label(&snap.weekly),
     );
 }

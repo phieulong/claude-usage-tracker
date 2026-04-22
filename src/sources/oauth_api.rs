@@ -1,12 +1,57 @@
 use anyhow::{anyhow, Context, Result};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
+use std::fmt;
 use std::process::Command;
+
+/// Returned when the usage endpoint responds with HTTP 429 Too Many Requests.
+#[derive(Debug)]
+pub struct RateLimitedError;
+
+impl fmt::Display for RateLimitedError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "OAuth usage endpoint returned 429 Too Many Requests")
+    }
+}
+
+impl std::error::Error for RateLimitedError {}
 
 const USAGE_ENDPOINT: &str = "https://api.anthropic.com/api/oauth/usage";
 const KEYCHAIN_SERVICE: &str = "Claude Code-credentials";
 const ANTHROPIC_BETA: &str = "oauth-2025-04-20";
-const USER_AGENT: &str = "claude-cli/2.1.117 (external, cli)";
+
+/// Read the installed Claude Code version from
+/// `~/Library/Application Support/Claude/claude-code/<version>/`.
+/// Returns e.g. "2.1.111", or "unknown" if the directory cannot be read.
+fn claude_version() -> String {
+    let base = dirs::home_dir()
+        .unwrap_or_else(|| std::path::PathBuf::from("."))
+        .join("Library/Application Support/Claude/claude-code");
+
+    std::fs::read_dir(&base)
+        .ok()
+        .and_then(|entries| {
+            let mut versions: Vec<String> = entries
+                .filter_map(|e| e.ok())
+                .filter(|e| e.path().is_dir())
+                .filter_map(|e| e.file_name().into_string().ok())
+                .filter(|name| name.chars().next().map_or(false, |c| c.is_ascii_digit()))
+                .collect();
+            // Sort semver-style so the highest version wins
+            versions.sort_by(|a, b| {
+                let parse = |s: &str| -> Vec<u64> {
+                    s.split('.').filter_map(|p| p.parse().ok()).collect()
+                };
+                parse(b).cmp(&parse(a))
+            });
+            versions.into_iter().next()
+        })
+        .unwrap_or_else(|| "unknown".to_string())
+}
+
+fn user_agent() -> String {
+    format!("claude-cli/{} (external, cli)", claude_version())
+}
 
 #[derive(Debug, Deserialize)]
 struct Credentials {
@@ -82,7 +127,7 @@ pub async fn fetch_usage() -> Result<OauthUsageResponse> {
         .get(USAGE_ENDPOINT)
         .header("Authorization", format!("Bearer {token}"))
         .header("anthropic-beta", ANTHROPIC_BETA)
-        .header("User-Agent", USER_AGENT)
+        .header("User-Agent", user_agent())
         .header("Content-Type", "application/json")
         .send()
         .await
@@ -90,6 +135,10 @@ pub async fn fetch_usage() -> Result<OauthUsageResponse> {
 
     let status = resp.status();
     let body = resp.text().await.unwrap_or_default();
+
+    if status == reqwest::StatusCode::TOO_MANY_REQUESTS {
+        return Err(anyhow::Error::new(RateLimitedError));
+    }
 
     if !status.is_success() {
         return Err(anyhow!(
