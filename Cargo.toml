@@ -16,5 +16,5 @@ mac-notification-sys = "0.6"
 tracing = "0.1"
 tracing-subscriber = "0.3"
 objc2 = "0.6"
-objc2-app-kit = { version = "0.3", features = ["NSApplication", "NSAttributedString", "NSButton", "NSColor", "NSStatusBar", "NSStatusItem", "NSStatusBarButton"] }
+objc2-app-kit = { version = "0.3", features = ["NSApplication", "NSAttributedString", "NSButton", "NSColor", "NSFont", "NSParagraphStyle", "NSStatusBar", "NSStatusItem", "NSStatusBarButton"] }
 objc2-foundation = { version = "0.3", features = ["NSAttributedString", "NSDate", "NSRunLoop"] }

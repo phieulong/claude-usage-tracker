@@ -6,6 +6,7 @@ mod output;
 mod sources;
 
 use anyhow::Result;
+use chrono::Utc;
 use clap::{Parser, Subcommand};
 use std::sync::{Arc, Mutex};
 use tokio::time::{interval, Duration};
@@ -108,6 +109,22 @@ async fn main() -> Result<()> {
     Ok(())
 }
 
+fn format_reset(reset_at: Option<chrono::DateTime<Utc>>) -> String {
+    match reset_at {
+        None => String::new(),
+        Some(t) => {
+            let secs = (t - Utc::now()).num_seconds();
+            if secs <= 0 {
+                "now".to_string()
+            } else {
+                let h = secs / 3600;
+                let m = (secs % 3600) / 60;
+                if h > 0 { format!("{}h {:02}m", h, m) } else { format!("{}m", m) }
+            }
+        }
+    }
+}
+
 async fn run_daemon(
     cfg: config::Config,
     data: Arc<Mutex<menubar::MenuBarData>>,
@@ -131,6 +148,8 @@ async fn run_daemon(
                     d.weekly_over = snap.weekly.utilization_pct
                         .map(|p| p >= cfg.alert_pct_weekly)
                         .unwrap_or(false);
+                    d.session_reset_str = format_reset(snap.session.reset_at);
+                    d.weekly_reset_str = format_reset(snap.weekly.reset_at);
                 }
 
                 output::print_snapshot(&snap, &cfg);
