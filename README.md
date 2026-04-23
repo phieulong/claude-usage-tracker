@@ -21,8 +21,7 @@ Daemon Rust theo dõi Claude Code session + weekly usage trên macOS.
 ### Homebrew (khuyên dùng)
 
 ```bash
-brew tap phieulong/tap
-brew install claude-usage-tracker
+brew install phieulong/tap/claude-usage-tracker
 brew services start claude-usage-tracker   # tự chạy khi login, không terminal
 ```
 
