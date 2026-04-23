@@ -11,12 +11,9 @@ use clap::{Parser, Subcommand};
 use std::sync::{Arc, Mutex};
 use tokio::time::{interval, Duration};
 
-/// Embedded icon — compiled into the binary at build time.
 const ICON_BYTES: &[u8] = include_bytes!("../claude_ai_icon.jpg");
 const ICON_FILENAME: &str = "claude_ai_icon.jpg";
 
-/// Extract the bundled icon to `~/.claude/claude_ai_icon.jpg` if not already there.
-/// Returns the path to the icon file.
 fn ensure_icon() -> std::path::PathBuf {
     let dest = dirs::home_dir()
         .unwrap_or_else(|| std::path::PathBuf::from("."))
@@ -41,7 +38,6 @@ struct Cli {
     #[command(subcommand)]
     command: Option<Command>,
 
-    /// Polling interval in seconds (overrides config)
     #[arg(long)]
     interval: Option<u64>,
 }
@@ -87,22 +83,22 @@ async fn main() -> Result<()> {
                 cfg.output_path.display()
             );
 
-            // Shared state between background tokio thread and main-thread menu bar
             let data: Arc<Mutex<menubar::MenuBarData>> =
                 Arc::new(Mutex::new(menubar::MenuBarData::default()));
             let data_bg = data.clone();
 
-            // Channel: daemon thread sends notification requests → main thread delivers them
             let (notif_tx, notif_rx) = std::sync::mpsc::channel::<menubar::NotifRequest>();
 
-            // Tokio daemon runs in a background OS thread so the main thread stays free for NSRunLoop
+            // Notify used by menubar to trigger an immediate daemon poll
+            let refresh_notify = Arc::new(tokio::sync::Notify::new());
+            let refresh_notify_bg = refresh_notify.clone();
+
             std::thread::spawn(move || {
                 let rt = tokio::runtime::Runtime::new().expect("tokio runtime");
-                rt.block_on(run_daemon(cfg, data_bg, notif_tx));
+                rt.block_on(run_daemon(cfg, data_bg, notif_tx, refresh_notify_bg));
             });
 
-            // Blocks forever — runs NSRunLoop + updates NSStatusItem + delivers notifications
-            menubar::run(data, notif_rx);
+            menubar::run(data, notif_rx, refresh_notify);
         }
     }
 
@@ -126,18 +122,26 @@ fn format_reset(reset_at: Option<chrono::DateTime<Utc>>) -> String {
 }
 
 async fn run_daemon(
-    cfg: config::Config,
+    initial_cfg: config::Config,
     data: Arc<Mutex<menubar::MenuBarData>>,
     notif_tx: std::sync::mpsc::Sender<menubar::NotifRequest>,
+    refresh_notify: Arc<tokio::sync::Notify>,
 ) {
-    let mut ticker = interval(Duration::from_secs(cfg.interval_secs));
+    let mut ticker = interval(Duration::from_secs(initial_cfg.interval_secs));
     let mut alert_state = alert::AlertState::default();
 
     loop {
-        ticker.tick().await;
+        // Wait for either the regular tick or an immediate refresh request
+        tokio::select! {
+            _ = ticker.tick() => {}
+            _ = refresh_notify.notified() => {}
+        }
+
+        // Reload config from disk so changes made via the menu bar take effect
+        let cfg = config::load().unwrap_or_else(|_| initial_cfg.clone());
+
         match aggregator::snapshot(&cfg).await {
             Ok(snap) => {
-                // Update menu bar data
                 {
                     let mut d = data.lock().unwrap();
                     d.session_pct = snap.session.utilization_pct;
@@ -150,6 +154,8 @@ async fn run_daemon(
                         .unwrap_or(false);
                     d.session_reset_str = format_reset(snap.session.reset_at);
                     d.weekly_reset_str = format_reset(snap.weekly.reset_at);
+                    d.source = snap.source.clone();
+                    d.has_cookie = cfg.session_cookie.is_some();
                 }
 
                 output::print_snapshot(&snap, &cfg);

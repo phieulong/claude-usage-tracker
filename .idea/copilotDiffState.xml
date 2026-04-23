@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project version="4">
+  <component name="CopilotDiffPersistence">
+    <option name="pendingDiffs">
+      <map>
+        <entry key="/Cargo (snapshot).toml">
+          <value>
+            <PendingDiffInfo>
+              <option name="filePath" value="/Cargo (snapshot).toml" />
+              <option name="originalContent" value="[package]&#10;name = &quot;claude-usage-tracker&quot;&#10;version = &quot;0.1.0&quot;&#10;edition = &quot;2024&quot;&#10;&#10;[dependencies]&#10;tokio = { version = &quot;1&quot;, features = [&quot;full&quot;] }&#10;reqwest = { version = &quot;0.12&quot;, features = [&quot;json&quot;, &quot;rustls-tls&quot;] }&#10;serde = { version = &quot;1&quot;, features = [&quot;derive&quot;] }&#10;serde_json = &quot;1&quot;&#10;chrono = { version = &quot;0.4&quot;, features = [&quot;serde&quot;] }&#10;anyhow = &quot;1&quot;&#10;clap = { version = &quot;4&quot;, features = [&quot;derive&quot;] }&#10;dirs = &quot;5&quot;&#10;mac-notification-sys = &quot;0.6&quot;&#10;tracing = &quot;0.1&quot;&#10;tracing-subscriber = &quot;0.3&quot;&#10;objc2 = &quot;0.6&quot;&#10;objc2-app-kit = { version = &quot;0.3&quot;, features = [&quot;NSApplication&quot;, &quot;NSAttributedString&quot;, &quot;NSButton&quot;, &quot;NSColor&quot;, &quot;NSStatusBar&quot;, &quot;NSStatusItem&quot;, &quot;NSStatusBarButton&quot;] }&#10;objc2-foundation = { version = &quot;0.3&quot;, features = [&quot;NSAttributedString&quot;, &quot;NSDate&quot;, &quot;NSRunLoop&quot;] }&#10;" />
+              <option name="updatedContent" value="[package]&#10;name = &quot;claude-usage-tracker&quot;&#10;version = &quot;0.1.0&quot;&#10;edition = &quot;2024&quot;&#10;&#10;[dependencies]&#10;tokio = { version = &quot;1&quot;, features = [&quot;full&quot;] }&#10;reqwest = { version = &quot;0.12&quot;, features = [&quot;json&quot;, &quot;rustls-tls&quot;] }&#10;serde = { version = &quot;1&quot;, features = [&quot;derive&quot;] }&#10;serde_json = &quot;1&quot;&#10;chrono = { version = &quot;0.4&quot;, features = [&quot;serde&quot;] }&#10;anyhow = &quot;1&quot;&#10;clap = { version = &quot;4&quot;, features = [&quot;derive&quot;] }&#10;dirs = &quot;5&quot;&#10;mac-notification-sys = &quot;0.6&quot;&#10;tracing = &quot;0.1&quot;&#10;tracing-subscriber = &quot;0.3&quot;&#10;objc2 = &quot;0.6&quot;&#10;objc2-app-kit = { version = &quot;0.3&quot;, features = [&quot;NSApplication&quot;, &quot;NSAttributedString&quot;, &quot;NSButton&quot;, &quot;NSColor&quot;, &quot;NSFont&quot;, &quot;NSStatusBar&quot;, &quot;NSStatusItem&quot;, &quot;NSStatusBarButton&quot;] }&#10;objc2-foundation = { version = &quot;0.3&quot;, features = [&quot;NSAttributedString&quot;, &quot;NSDate&quot;, &quot;NSRunLoop&quot;] }&#10;" />
+            </PendingDiffInfo>
+          </value>
+        </entry>
+      </map>
+    </option>
+  </component>
+</project>
