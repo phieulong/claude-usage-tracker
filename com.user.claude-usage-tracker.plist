@@ -4,14 +4,15 @@
 <plist version="1.0">
 <dict>
     <key>Label</key>
-    <string>com.user.claude-usage-tracker</string>
+    <string>com.phieulong.claude-usage-tracker</string>
 
     <key>ProgramArguments</key>
     <array>
-        <string>/Users/pc00002270/.local/bin/claude-usage-tracker</string>
+        <!-- Homebrew Apple Silicon: /opt/homebrew/bin/claude-usage-tracker -->
+        <!-- Homebrew Intel:         /usr/local/bin/claude-usage-tracker      -->
+        <!-- .app bundle:  /Applications/Claude Usage Tracker.app/Contents/MacOS/claude-usage-tracker -->
+        <string>/opt/homebrew/bin/claude-usage-tracker</string>
         <string>daemon</string>
-        <string>--interval</string>
-        <string>900</string>
     </array>
 
     <key>RunAtLoad</key>

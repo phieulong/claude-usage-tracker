@@ -16,11 +16,27 @@ Daemon Rust theo dõi Claude Code session + weekly usage trên macOS.
 - Lưu lịch sử snapshot ra JSON
 - Chạy như launchd daemon
 
-## Build
+## Cài đặt
+
+### Homebrew (khuyên dùng)
+
+```bash
+brew tap phieulong/tap
+brew install claude-usage-tracker
+brew services start claude-usage-tracker   # tự chạy khi login, không terminal
+```
+
+### Tải .app bundle
+
+Tải file `claude-usage-tracker-universal-apple-darwin.zip` từ [Releases](https://github.com/phieulong/claude-usage-tracker/releases), giải nén và kéo vào `/Applications/`. Double-click để chạy — app sẽ hiện trên menu bar, không mở Terminal.
+
+### Build từ source
 
 ```bash
 cargo build --release
-cp target/release/claude-usage-tracker ~/.local/bin/
+# Build .app bundle (arm64 | x86_64 | universal)
+./scripts/build_app.sh universal
+cp -r "dist/Claude Usage Tracker.app" /Applications/
 ```
 
 ## Usage
