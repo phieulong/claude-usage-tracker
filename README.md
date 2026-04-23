@@ -18,12 +18,22 @@ Daemon Rust theo dõi Claude Code session + weekly usage trên macOS.
 
 ## Cài đặt
 
-### Homebrew (khuyên dùng)
+### One-line install (khuyên dùng — hoạt động trên mọi macOS)
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/phieulong/claude-usage-tracker/main/install.sh | bash
+```
+
+Script tự động: tải binary đúng kiến trúc (arm64/x86_64), cài vào PATH, hỏi có muốn tự chạy khi login không.
+
+### Homebrew
 
 ```bash
 brew install phieulong/tap/claude-usage-tracker
-brew services start claude-usage-tracker   # tự chạy khi login, không terminal
+brew services start claude-usage-tracker
 ```
+
+> Nếu gặp lỗi CLT trên macOS mới: dùng one-line install ở trên thay thế.
 
 ### Tải .app bundle
 
