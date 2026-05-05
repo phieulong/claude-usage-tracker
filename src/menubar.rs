@@ -17,9 +17,11 @@ use std::sync::{Arc, Mutex, OnceLock};
 
 use crate::aggregator::DataSource;
 
-/// State shared between the daemon thread and the menu bar.
+/// Per-account usage data shared between daemon and menu bar.
 #[derive(Clone, Default)]
-pub struct MenuBarData {
+pub struct AccountData {
+    pub id: String,
+    pub name: String,
     pub session_pct: Option<f64>,
     pub weekly_pct: Option<f64>,
     pub session_over: bool,
@@ -27,7 +29,13 @@ pub struct MenuBarData {
     pub session_reset_str: String,
     pub weekly_reset_str: String,
     pub source: DataSource,
-    pub has_cookie: bool,
+    pub error: Option<String>,
+}
+
+/// State shared between the daemon thread and the menu bar.
+#[derive(Clone, Default)]
+pub struct MenuBarData {
+    pub accounts: Vec<AccountData>,
 }
 
 /// Notification request sent from the daemon thread to be delivered on the main thread.
@@ -41,8 +49,8 @@ pub struct NotifRequest {
 
 #[allow(dead_code)]
 enum MenuAction {
-    SetCookie,
-    ClearCookie,
+    AddAccount,
+    RemoveAccount(String),
     RefreshNow,
     Quit,
 }
@@ -60,14 +68,9 @@ define_class!(
     struct MenuHandler;
 
     impl MenuHandler {
-        #[unsafe(method(setCookieAction:))]
-        fn set_cookie_action(&self, _sender: &AnyObject) {
-            send_action(MenuAction::SetCookie);
-        }
-
-        #[unsafe(method(clearCookieAction:))]
-        fn clear_cookie_action(&self, _sender: &AnyObject) {
-            send_action(MenuAction::ClearCookie);
+        #[unsafe(method(addAccountAction:))]
+        fn add_account_action(&self, _sender: &AnyObject) {
+            send_action(MenuAction::AddAccount);
         }
 
         #[unsafe(method(refreshNowAction:))]
@@ -78,6 +81,13 @@ define_class!(
         #[unsafe(method(quitAction:))]
         fn quit_action(&self, _sender: &AnyObject) {
             std::process::exit(0);
+        }
+
+        #[unsafe(method(removeAccountAction:))]
+        fn remove_account_action(&self, _sender: &AnyObject) {
+            // Account ID passed via represented object is not trivial in objc2,
+            // so we use a dialog to let user pick which account to remove.
+            send_action(MenuAction::RemoveAccount(String::new()));
         }
     }
 );
@@ -109,31 +119,27 @@ fn make_action_item(
             &NSString::from_str(""),
         )
     };
-    // MenuHandler → NSObject → AnyObject via deref coercions
     let target: &AnyObject = &**handler;
     unsafe { item.setTarget(Some(target)); }
     item
 }
 
-/// Show an osascript dialog to get a session cookie from the user.
-/// Returns `None` if the user cancelled or entered nothing.
-fn prompt_for_cookie() -> Option<String> {
-    let script = concat!(
-        "tell application \"System Events\" to display dialog ",
-        "\"Paste your claude.ai sessionKey cookie value:\" ",
-        "default answer \"\" ",
-        "buttons {\"Cancel\", \"Save\"} default button \"Save\""
+/// Show an osascript dialog to get text input from the user.
+fn prompt_dialog(message: &str, default: &str) -> Option<String> {
+    let script = format!(
+        "tell application \"System Events\" to display dialog \"{}\" default answer \"{}\" buttons {{\"Cancel\", \"OK\"}} default button \"OK\"",
+        message.replace('"', "\\\""),
+        default.replace('"', "\\\""),
     );
     let output = std::process::Command::new("osascript")
         .arg("-e")
-        .arg(script)
+        .arg(&script)
         .output()
         .ok()?;
     if !output.status.success() {
-        return None; // user cancelled
+        return None;
     }
     let stdout = String::from_utf8_lossy(&output.stdout);
-    // Output: "button returned:Save, text returned:VALUE\n"
     stdout
         .split("text returned:")
         .nth(1)
@@ -141,48 +147,102 @@ fn prompt_for_cookie() -> Option<String> {
         .filter(|s| !s.is_empty())
 }
 
+/// Show a button-choice dialog. Returns the button text user clicked, or None on cancel.
+fn choice_dialog(message: &str, buttons: &[&str]) -> Option<String> {
+    let btns = buttons.iter().map(|b| format!("\"{}\"", b)).collect::<Vec<_>>().join(", ");
+    let script = format!(
+        "tell application \"System Events\" to display dialog \"{}\" buttons {{{}}} default button \"{}\"",
+        message.replace('"', "\\\""),
+        btns,
+        buttons.last().unwrap_or(&"OK"),
+    );
+    let output = std::process::Command::new("osascript")
+        .arg("-e")
+        .arg(&script)
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    stdout
+        .split("button returned:")
+        .nth(1)
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+}
+
+/// Show a list dialog to pick from items. Returns chosen item or None.
+fn list_dialog(message: &str, items: &[String]) -> Option<String> {
+    let item_list = items.iter().map(|i| format!("\"{}\"", i.replace('"', "\\\""))).collect::<Vec<_>>().join(", ");
+    let script = format!(
+        "tell application \"System Events\" to choose from list {{{}}} with prompt \"{}\"",
+        item_list,
+        message.replace('"', "\\\""),
+    );
+    let output = std::process::Command::new("osascript")
+        .arg("-e")
+        .arg(&script)
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    if stdout == "false" {
+        return None;
+    }
+    Some(stdout)
+}
+
 // ── Title rendering ───────────────────────────────────────────────────────────
 
 fn build_title(data: &MenuBarData) -> Retained<NSAttributedString> {
-    let s_pct = data
-        .session_pct
-        .map(|p| format!("S:{:.0}%", p))
-        .unwrap_or_else(|| "S:?".to_string());
-    let w_pct = data
-        .weekly_pct
-        .map(|p| format!("W:{:.0}%", p))
-        .unwrap_or_else(|| "W:?".to_string());
+    if data.accounts.is_empty() {
+        let nsstr = NSString::from_str("Claude…");
+        return NSMutableAttributedString::from_nsstring(&nsstr).into_super();
+    }
 
-    let s_suffix = if data.session_reset_str.is_empty() {
-        String::new()
-    } else {
-        format!(" ─ {}", data.session_reset_str)
-    };
-    let w_suffix = if data.weekly_reset_str.is_empty() {
-        String::new()
-    } else {
-        format!(" ─ {}", data.weekly_reset_str)
-    };
+    // Build multi-line title: one line per account
+    let mut lines: Vec<String> = Vec::new();
+    let mut line_meta: Vec<(usize, bool, usize, bool)> = Vec::new(); // (s_pct_len, s_over, w_pct_len, w_over)
 
-    let full = format!("{}{}\n{}{}", s_pct, s_suffix, w_pct, w_suffix);
+    for acc in &data.accounts {
+        let label = if acc.name.is_empty() { "?" } else { &acc.name };
+        let s_pct = acc.session_pct
+            .map(|p| format!("S:{:.0}%", p))
+            .unwrap_or_else(|| "S:?".to_string());
+        let w_pct = acc.weekly_pct
+            .map(|p| format!("W:{:.0}%", p))
+            .unwrap_or_else(|| "W:?".to_string());
+
+        let s_suffix = if acc.session_reset_str.is_empty() {
+            String::new()
+        } else {
+            format!(" {}", acc.session_reset_str)
+        };
+
+        let line = format!("{}: {} {}{}", label, s_pct, w_pct, s_suffix);
+        let s_start = label.len() + 2; // after "Name: "
+        let s_pct_len = s_pct.len();
+        let w_pct_len = w_pct.len();
+        line_meta.push((s_pct_len, acc.session_over, w_pct_len, acc.weekly_over));
+        lines.push(line);
+    }
+
+    let full = lines.join("\n");
     let nsstr = NSString::from_str(&full);
     let mstr = NSMutableAttributedString::from_nsstring(&nsstr);
 
-    let s_pct_len = s_pct.encode_utf16().count();
-    let line1_len = format!("{}{}", s_pct, s_suffix).encode_utf16().count();
-    let w_pct_start = line1_len + 1;
-    let w_pct_len = w_pct.encode_utf16().count();
+    let total_len = full.encode_utf16().count();
+
+    let regular: Retained<NSFont> = NSFont::systemFontOfSize(10.0);
+    let bold: Retained<NSFont> = NSFont::boldSystemFontOfSize(10.0);
+    let regular_any: &AnyObject = &*regular;
+    let bold_any: &AnyObject = &*bold;
 
     let orange: Retained<NSColor> = NSColor::systemOrangeColor();
     let green: Retained<NSColor> = NSColor::systemGreenColor();
-    let orange_any: &AnyObject = &*orange;
-    let green_any: &AnyObject = &*green;
-
-    let regular: Retained<NSFont> = NSFont::systemFontOfSize(10.5);
-    let bold: Retained<NSFont> = NSFont::boldSystemFontOfSize(10.5);
-    let regular_any: &AnyObject = &*regular;
-    let bold_any: &AnyObject = &*bold;
-    let total_len = full.encode_utf16().count();
 
     let para = NSMutableParagraphStyle::new();
     para.setMaximumLineHeight(12.0);
@@ -208,26 +268,58 @@ fn build_title(data: &MenuBarData) -> Retained<NSAttributedString> {
             baseline_any,
             NSRange { location: 0, length: total_len },
         );
-        mstr.addAttribute_value_range(
-            NSFontAttributeName,
-            bold_any,
-            NSRange { location: 0, length: s_pct_len },
-        );
-        mstr.addAttribute_value_range(
-            NSFontAttributeName,
-            bold_any,
-            NSRange { location: w_pct_start, length: w_pct_len },
-        );
-        mstr.addAttribute_value_range(
-            NSForegroundColorAttributeName,
-            if data.session_over { orange_any } else { green_any },
-            NSRange { location: 0, length: s_pct_len },
-        );
-        mstr.addAttribute_value_range(
-            NSForegroundColorAttributeName,
-            if data.weekly_over { orange_any } else { green_any },
-            NSRange { location: w_pct_start, length: w_pct_len },
-        );
+    }
+
+    // Apply bold + color to each account's S:XX% and W:XX%
+    let mut offset: usize = 0;
+    for (i, line) in lines.iter().enumerate() {
+        let (s_pct_len, s_over, w_pct_len, w_over) = line_meta[i];
+        let acc = &data.accounts[i];
+        let label = if acc.name.is_empty() { "?" } else { &acc.name };
+        let prefix_len = label.encode_utf16().count() + 2; // "Name: "
+
+        let s_start = offset + prefix_len;
+        let s_pct_utf16 = lines[i][label.len() + 2..label.len() + 2 + s_pct_len].encode_utf16().count();
+
+        // Find W: position
+        let w_start_byte = label.len() + 2 + s_pct_len + 1; // +1 for space
+        let w_start_utf16 = lines[i][..w_start_byte].encode_utf16().count();
+
+        let orange_any: &AnyObject = &*orange;
+        let green_any: &AnyObject = &*green;
+
+        unsafe {
+            // Bold + color for S:XX%
+            mstr.addAttribute_value_range(
+                NSFontAttributeName,
+                bold_any,
+                NSRange { location: s_start, length: s_pct_utf16 },
+            );
+            mstr.addAttribute_value_range(
+                NSForegroundColorAttributeName,
+                if s_over { orange_any } else { green_any },
+                NSRange { location: s_start, length: s_pct_utf16 },
+            );
+
+            // Bold + color for W:XX%
+            let w_abs = offset + w_start_utf16;
+            let w_pct_utf16 = {
+                let w_str = &lines[i][w_start_byte..w_start_byte + w_pct_len];
+                w_str.encode_utf16().count()
+            };
+            mstr.addAttribute_value_range(
+                NSFontAttributeName,
+                bold_any,
+                NSRange { location: w_abs, length: w_pct_utf16 },
+            );
+            mstr.addAttribute_value_range(
+                NSForegroundColorAttributeName,
+                if w_over { orange_any } else { green_any },
+                NSRange { location: w_abs, length: w_pct_utf16 },
+            );
+        }
+
+        offset += line.encode_utf16().count() + 1; // +1 for \n
     }
 
     Retained::into_super(mstr)
@@ -249,14 +341,11 @@ pub fn run(
     app.setActivationPolicy(NSApplicationActivationPolicy::Accessory);
     app.finishLaunching();
 
-    // Action channel: ObjC callbacks → Rust handler
     let (action_tx, action_rx) = std::sync::mpsc::channel::<MenuAction>();
     ACTION_TX.set(Mutex::new(action_tx)).ok();
 
-    // ObjC action handler object
     let handler: Retained<MenuHandler> = unsafe { msg_send![MenuHandler::class(), new] };
 
-    // Status item
     let status_bar = NSStatusBar::systemStatusBar();
     let item: Retained<NSStatusItem> = status_bar.statusItemWithLength(-1.0_f64);
     if let Some(btn) = item.button(mtm) {
@@ -268,19 +357,18 @@ pub fn run(
     let menu = NSMenu::new(mtm);
     menu.setAutoenablesItems(false);
 
-    let source_item = make_item("Source: OAuth", mtm);
-    source_item.setEnabled(false);
-    menu.addItem(&source_item);
+    // Account list section (dynamic — rebuilt each tick)
+    let accounts_header = make_item("── Accounts ──", mtm);
+    accounts_header.setEnabled(false);
+    menu.addItem(&accounts_header);
 
     menu.addItem(&NSMenuItem::separatorItem(mtm));
 
-    let set_item = make_action_item("Set Session Cookie…", &handler, sel!(setCookieAction:), mtm);
-    menu.addItem(&set_item);
+    let add_item = make_action_item("Add Account…", &handler, sel!(addAccountAction:), mtm);
+    menu.addItem(&add_item);
 
-    let clear_item =
-        make_action_item("Clear Session Cookie", &handler, sel!(clearCookieAction:), mtm);
-    clear_item.setHidden(true);
-    menu.addItem(&clear_item);
+    let remove_item = make_action_item("Remove Account…", &handler, sel!(removeAccountAction:), mtm);
+    menu.addItem(&remove_item);
 
     menu.addItem(&NSMenuItem::separatorItem(mtm));
 
@@ -294,16 +382,13 @@ pub fn run(
 
     item.setMenu(Some(&menu));
 
-    let mut prev_has_cookie = false;
+    // Track dynamic account menu items (inserted between header and separator)
+    let mut account_items: Vec<Retained<NSMenuItem>> = Vec::new();
+    let mut prev_account_count: usize = 0;
 
     loop {
-        // Pump AppKit events for up to 0.5 s — this is the correct way to dispatch
-        // mouse-click events (including status-item clicks that open the dropdown).
-        // NSRunLoop::runUntilDate only processes low-level run-loop sources and does NOT
-        // call NSApplication::sendEvent, so menus would never appear with that approach.
         let until = NSDate::dateWithTimeIntervalSinceNow(0.5);
         unsafe {
-            // Blocking wait: returns when an event arrives or the 0.5 s timeout expires.
             if let Some(event) = app.nextEventMatchingMask_untilDate_inMode_dequeue(
                 NSEventMask::Any,
                 Some(&until),
@@ -312,7 +397,6 @@ pub fn run(
             ) {
                 app.sendEvent(&event);
             }
-            // Drain any remaining queued events without blocking further.
             let now = NSDate::dateWithTimeIntervalSinceNow(0.0);
             while let Some(event) = app.nextEventMatchingMask_untilDate_inMode_dequeue(
                 NSEventMask::Any,
@@ -334,33 +418,11 @@ pub fn run(
         // Handle menu actions
         while let Ok(action) = action_rx.try_recv() {
             match action {
-                MenuAction::SetCookie => {
-                    if let Some(cookie) = prompt_for_cookie() {
-                        match crate::config::load() {
-                            Ok(mut cfg) => {
-                                cfg.session_cookie = Some(cookie);
-                                if let Err(e) = crate::config::save(&cfg) {
-                                    tracing::error!("Failed to save config: {e}");
-                                } else {
-                                    refresh_notify.notify_one();
-                                }
-                            }
-                            Err(e) => tracing::error!("Failed to load config: {e}"),
-                        }
-                    }
+                MenuAction::AddAccount => {
+                    handle_add_account(&refresh_notify);
                 }
-                MenuAction::ClearCookie => {
-                    match crate::config::load() {
-                        Ok(mut cfg) => {
-                            cfg.session_cookie = None;
-                            if let Err(e) = crate::config::save(&cfg) {
-                                tracing::error!("Failed to save config: {e}");
-                            } else {
-                                refresh_notify.notify_one();
-                            }
-                        }
-                        Err(e) => tracing::error!("Failed to load config: {e}"),
-                    }
+                MenuAction::RemoveAccount(_) => {
+                    handle_remove_account(&refresh_notify);
                 }
                 MenuAction::RefreshNow => {
                     refresh_notify.notify_one();
@@ -372,20 +434,138 @@ pub fn run(
         // Update menu bar state
         let current = data.lock().unwrap().clone();
 
-        let source_label = match current.source {
-            DataSource::WebCookie => "Source: Web Cookie ✓",
-            DataSource::OAuth => "Source: OAuth",
-        };
-        source_item.setTitle(&NSString::from_str(source_label));
+        // Rebuild account items in menu if count changed
+        if current.accounts.len() != prev_account_count {
+            // Remove old dynamic items
+            for old_item in &account_items {
+                menu.removeItem(old_item);
+            }
+            account_items.clear();
 
-        if current.has_cookie != prev_has_cookie {
-            clear_item.setHidden(!current.has_cookie);
-            prev_has_cookie = current.has_cookie;
+            // Insert new items after the header (index 1 = after "── Accounts ──")
+            for (i, acc) in current.accounts.iter().enumerate() {
+                let source_tag = match acc.source {
+                    DataSource::OAuth => "OAuth",
+                    DataSource::WebCookie => "Cookie",
+                };
+                let s_str = acc.session_pct.map(|p| format!("S:{:.0}%", p)).unwrap_or("S:?".into());
+                let w_str = acc.weekly_pct.map(|p| format!("W:{:.0}%", p)).unwrap_or("W:?".into());
+                let label = format!("  {} — {} {} [{}]", acc.name, s_str, w_str, source_tag);
+                let mi = make_item(&label, mtm);
+                mi.setEnabled(false);
+                menu.insertItem_atIndex(&mi, (1 + i) as isize);
+                account_items.push(mi);
+            }
+            prev_account_count = current.accounts.len();
+        } else {
+            // Update existing items' titles
+            for (i, acc) in current.accounts.iter().enumerate() {
+                if i < account_items.len() {
+                    let source_tag = match acc.source {
+                        DataSource::OAuth => "OAuth",
+                        DataSource::WebCookie => "Cookie",
+                    };
+                    let s_str = acc.session_pct.map(|p| format!("S:{:.0}%", p)).unwrap_or("S:?".into());
+                    let w_str = acc.weekly_pct.map(|p| format!("W:{:.0}%", p)).unwrap_or("W:?".into());
+                    let reset = if acc.session_reset_str.is_empty() { String::new() } else { format!(" ─ {}", acc.session_reset_str) };
+                    let label = format!("  {} — {} {}{} [{}]", acc.name, s_str, w_str, reset, source_tag);
+                    account_items[i].setTitle(&NSString::from_str(&label));
+                }
+            }
         }
 
+        // Update status bar title
         if let Some(btn) = item.button(mtm) {
             let btn: &NSStatusBarButton = &btn;
             btn.setAttributedTitle(&build_title(&current));
         }
+    }
+}
+
+fn handle_add_account(refresh_notify: &Arc<tokio::sync::Notify>) {
+    // Step 1: Ask for account name
+    let name = match prompt_dialog("Enter account name (e.g. Work, Personal):", "") {
+        Some(n) => n,
+        None => return,
+    };
+
+    // Step 2: Ask for source type
+    let source_choice = match choice_dialog(
+        "Choose authentication method:",
+        &["Cancel", "Session Cookie", "OAuth (Keychain)"],
+    ) {
+        Some(s) => s,
+        None => return,
+    };
+
+    let (source, credential) = match source_choice.as_str() {
+        "Session Cookie" => {
+            let cookie = match prompt_dialog("Paste your claude.ai sessionKey cookie:", "") {
+                Some(c) => c,
+                None => return,
+            };
+            (crate::config::AccountSource::WebCookie, Some(cookie))
+        }
+        "OAuth (Keychain)" => {
+            // Optional: custom keychain service
+            let service = prompt_dialog(
+                "Keychain service name (leave empty for default 'Claude Code-credentials'):",
+                "",
+            );
+            let cred = service.filter(|s| !s.is_empty());
+            (crate::config::AccountSource::OAuth, cred)
+        }
+        _ => return,
+    };
+
+    // Save to config
+    match crate::config::load() {
+        Ok(mut cfg) => {
+            cfg.accounts.push(crate::config::Account {
+                id: uuid::Uuid::new_v4().to_string(),
+                name,
+                source,
+                credential,
+            });
+            if let Err(e) = crate::config::save(&cfg) {
+                tracing::error!("Failed to save config: {e}");
+            } else {
+                refresh_notify.notify_one();
+            }
+        }
+        Err(e) => tracing::error!("Failed to load config: {e}"),
+    }
+}
+
+fn handle_remove_account(refresh_notify: &Arc<tokio::sync::Notify>) {
+    let cfg = match crate::config::load() {
+        Ok(c) => c,
+        Err(e) => {
+            tracing::error!("Failed to load config: {e}");
+            return;
+        }
+    };
+
+    if cfg.accounts.is_empty() {
+        return;
+    }
+
+    let names: Vec<String> = cfg.accounts.iter().map(|a| a.name.clone()).collect();
+    let chosen = match list_dialog("Select account to remove:", &names) {
+        Some(c) => c,
+        None => return,
+    };
+
+    // Find and remove the account
+    match crate::config::load() {
+        Ok(mut cfg) => {
+            cfg.accounts.retain(|a| a.name != chosen);
+            if let Err(e) = crate::config::save(&cfg) {
+                tracing::error!("Failed to save config: {e}");
+            } else {
+                refresh_notify.notify_one();
+            }
+        }
+        Err(e) => tracing::error!("Failed to load config: {e}"),
     }
 }

@@ -78,9 +78,9 @@ async fn main() -> Result<()> {
         }
         Command::Daemon => {
             tracing::info!(
-                "Starting daemon — polling every {}s, output: {}",
+                "Starting daemon — polling every {}s, {} account(s)",
                 cfg.interval_secs,
-                cfg.output_path.display()
+                cfg.accounts.len(),
             );
 
             let data: Arc<Mutex<menubar::MenuBarData>> =
@@ -89,7 +89,6 @@ async fn main() -> Result<()> {
 
             let (notif_tx, notif_rx) = std::sync::mpsc::channel::<menubar::NotifRequest>();
 
-            // Notify used by menubar to trigger an immediate daemon poll
             let refresh_notify = Arc::new(tokio::sync::Notify::new());
             let refresh_notify_bg = refresh_notify.clone();
 
@@ -131,44 +130,58 @@ async fn run_daemon(
     let mut alert_state = alert::AlertState::default();
 
     loop {
-        // Wait for either the regular tick or an immediate refresh request
         tokio::select! {
             _ = ticker.tick() => {}
             _ = refresh_notify.notified() => {}
         }
 
-        // Reload config from disk so changes made via the menu bar take effect
         let cfg = config::load().unwrap_or_else(|_| initial_cfg.clone());
+        let results = aggregator::snapshot_all(&cfg).await;
 
-        match aggregator::snapshot(&cfg).await {
-            Ok(snap) => {
-                {
-                    let mut d = data.lock().unwrap();
-                    d.session_pct = snap.session.utilization_pct;
-                    d.weekly_pct = snap.weekly.utilization_pct;
-                    d.session_over = snap.session.utilization_pct
-                        .map(|p| p >= cfg.alert_pct_session)
-                        .unwrap_or(false);
-                    d.weekly_over = snap.weekly.utilization_pct
-                        .map(|p| p >= cfg.alert_pct_weekly)
-                        .unwrap_or(false);
-                    d.session_reset_str = format_reset(snap.session.reset_at);
-                    d.weekly_reset_str = format_reset(snap.weekly.reset_at);
-                    d.source = snap.source.clone();
-                    d.has_cookie = cfg.session_cookie.is_some();
-                }
+        let mut account_data_vec: Vec<menubar::AccountData> = Vec::new();
 
-                output::print_snapshot(&snap, &cfg);
-                if let Err(e) = output::write_json(&snap, &cfg) {
-                    tracing::error!("Failed to write JSON: {e}");
+        for (account, result) in &results {
+            match result {
+                Ok(snap) => {
+                    let acc_data = menubar::AccountData {
+                        id: account.id.clone(),
+                        name: account.name.clone(),
+                        session_pct: snap.session.utilization_pct,
+                        weekly_pct: snap.weekly.utilization_pct,
+                        session_over: snap.session.utilization_pct
+                            .map(|p| p >= cfg.alert_pct_session)
+                            .unwrap_or(false),
+                        weekly_over: snap.weekly.utilization_pct
+                            .map(|p| p >= cfg.alert_pct_weekly)
+                            .unwrap_or(false),
+                        session_reset_str: format_reset(snap.session.reset_at),
+                        weekly_reset_str: format_reset(snap.weekly.reset_at),
+                        source: snap.source.clone(),
+                        error: None,
+                    };
+                    account_data_vec.push(acc_data);
+
+                    output::print_snapshot(snap, &cfg);
+                    if let Err(e) = output::write_json(snap, &cfg) {
+                        tracing::error!("Failed to write JSON: {e}");
+                    }
+                    if let Err(e) = alert::maybe_notify(snap, &cfg, &mut alert_state, &notif_tx).await {
+                        tracing::error!("Alert error: {e}");
+                    }
                 }
-                if let Err(e) = alert::maybe_notify(&snap, &cfg, &mut alert_state, &notif_tx).await {
-                    tracing::error!("Alert error: {e}");
+                Err(e) => {
+                    tracing::error!("Account '{}' failed: {e}", account.name);
+                    account_data_vec.push(menubar::AccountData {
+                        id: account.id.clone(),
+                        name: account.name.clone(),
+                        error: Some(format!("{e}")),
+                        ..Default::default()
+                    });
                 }
-            }
-            Err(e) => {
-                tracing::error!("Snapshot failed: {e}");
             }
         }
+
+        let mut d = data.lock().unwrap();
+        d.accounts = account_data_vec;
     }
 }

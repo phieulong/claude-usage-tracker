@@ -1,6 +1,6 @@
 # Claude Usage Tracker
 
-> macOS menu bar app theo dõi usage quota của Claude AI — session 5h và weekly 7d — hiển thị trực tiếp trên menu bar, không cần mở browser.
+> macOS menu bar app theo dõi usage quota của Claude AI — session 5h và weekly 7d — hỗ trợ **nhiều tài khoản cùng lúc**, hiển thị trực tiếp trên menu bar.
 
 ![macOS](https://img.shields.io/badge/macOS-12%2B-blue) ![Rust](https://img.shields.io/badge/Rust-2024-orange) ![License](https://img.shields.io/badge/license-MIT-green)
 
@@ -12,15 +12,15 @@ Claude Code giới hạn usage theo 2 chu kỳ:
 - **Session (5h)**: reset mỗi 5 tiếng kể từ request đầu tiên trong session
 - **Weekly (7d)**: reset vào một ngày/giờ cố định mỗi tuần
 
-Không có cách nào xem % còn lại ngoài việc vào Settings → Usage trên web. App này giải quyết điều đó — hiển thị luôn ngoài menu bar, cập nhật tự động, cảnh báo khi gần hết quota.
+Không có cách nào xem % còn lại ngoài việc vào Settings → Usage trên web. App này giải quyết điều đó — hiển thị luôn ngoài menu bar, cập nhật tự động, cảnh báo khi gần hết quota. **Hỗ trợ theo dõi nhiều tài khoản Claude đồng thời.**
 
 ---
 
 ## Demo
 
 ```
-S:65% — 4h 36m
-W:74% — 34h 36m
+Work: S:65% W:74% 4h 36m
+Personal: S:12% W:8% 2h 15m
 ```
 
 **S** = Session (5h) · **W** = Weekly (7d)  
@@ -29,9 +29,12 @@ Màu **xanh** = bình thường · Màu **cam** = đã vượt ngưỡng cảnh 
 Click vào menu bar icon:
 
 ```
-Source: OAuth ✓
+── Accounts ──
+  Work — S:65% W:74% ─ 4h 36m [OAuth]
+  Personal — S:12% W:8% ─ 2h 15m [Cookie]
 ────────────────────
-Set Session Cookie…
+Add Account…
+Remove Account…
 ────────────────────
 Refresh Now
 ────────────────────
@@ -111,21 +114,30 @@ claude-usage-tracker config
 claude-usage-tracker --interval 300 daemon   # poll mỗi 5 phút
 ```
 
-### Menu bar
+### Menu bar — Nhiều tài khoản
 
-Sau khi chạy, icon xuất hiện ở góc phải menu bar. Click để mở dropdown:
+Sau khi chạy, icon xuất hiện ở góc phải menu bar hiển thị usage **tất cả tài khoản**. Click để mở dropdown:
 
 | Menu item | Chức năng |
 |---|---|
-| `Source: OAuth ✓` | Cho biết đang lấy data từ nguồn nào |
-| `Set Session Cookie…` | Nhập cookie để dùng Web API (không cần Claude Code) |
-| `Clear Session Cookie` | Xoá cookie, quay về OAuth |
+| `── Accounts ──` | Header, liệt kê từng account với S%, W%, source |
+| `Add Account…` | Thêm tài khoản mới (nhập tên + chọn OAuth/Cookie + credential) |
+| `Remove Account…` | Xoá tài khoản (chọn từ danh sách) |
 | `Refresh Now` | Poll dữ liệu ngay lập tức |
 | `Quit` | Thoát app |
 
+### Thêm tài khoản
+
+Click **Add Account…** → nhập lần lượt:
+1. **Tên gợi nhớ** (ví dụ: "Work", "Personal", "Team")
+2. **Phương thức xác thực**: Session Cookie hoặc OAuth (Keychain)
+3. **Credential**: paste sessionKey cookie, hoặc tên keychain service (bỏ trống = mặc định)
+
+Mỗi tài khoản hiển thị 1 dòng riêng trên menu bar.
+
 ### Cảnh báo notification
 
-Khi usage vượt threshold (mặc định 80%), app gửi macOS notification. Cứ mỗi **5% tiếp theo** lại gửi thêm (85%, 90%, 95%...). Tự reset sau khi session/weekly reset.
+Khi usage vượt threshold (mặc định 80%), app gửi macOS notification **kèm tên tài khoản**. Cứ mỗi **5% tiếp theo** lại gửi thêm (85%, 90%, 95%...). Tự reset sau khi session/weekly reset.
 
 ---
 
@@ -139,8 +151,21 @@ File tự sinh tại `~/.claude/usage-tracker-config.json`:
   "alert_pct_session": 80.0,
   "alert_pct_weekly": 80.0,
   "webhook_url": null,
-  "session_cookie": null,
-  "output_path": "~/.claude/usage-tracker.json"
+  "output_path": "~/.claude/usage-tracker.json",
+  "accounts": [
+    {
+      "id": "uuid-auto-generated",
+      "name": "Work",
+      "source": "OAuth",
+      "credential": null
+    },
+    {
+      "id": "uuid-auto-generated",
+      "name": "Personal",
+      "source": "WebCookie",
+      "credential": "sk-ant-session-..."
+    }
+  ]
 }
 ```
 
@@ -150,16 +175,27 @@ File tự sinh tại `~/.claude/usage-tracker-config.json`:
 | `alert_pct_session` | `80.0` | Ngưỡng cảnh báo session (%) |
 | `alert_pct_weekly` | `80.0` | Ngưỡng cảnh báo weekly (%) |
 | `webhook_url` | `null` | URL Slack/Discord webhook |
-| `session_cookie` | `null` | `sessionKey` cookie của claude.ai (cho web user không dùng Claude Code) |
 | `output_path` | `~/.claude/usage-tracker.json` | File lưu lịch sử snapshot |
+| `accounts` | 1 account OAuth | Danh sách tài khoản theo dõi |
+
+### Account fields
+
+| Field | Mô tả |
+|---|---|
+| `id` | UUID tự động, không cần sửa |
+| `name` | Tên hiển thị trên menu bar |
+| `source` | `"OAuth"` hoặc `"WebCookie"` |
+| `credential` | Session cookie (WebCookie) hoặc keychain service override (OAuth, null = mặc định) |
 
 Sửa trực tiếp JSON → bấm **Refresh Now** trong menu → có hiệu lực ngay, không cần restart.
+
+> **Migration tự động**: Nếu đang dùng config cũ (có `session_cookie`), app tự chuyển sang format mới khi khởi động.
 
 ---
 
 ## Nguồn dữ liệu
 
-App hỗ trợ 2 nguồn, tự động ưu tiên:
+App hỗ trợ 2 nguồn **per-account**, poll song song tất cả accounts:
 
 ### 1. OAuth API (mặc định)
 
@@ -179,13 +215,11 @@ Response:
 }
 ```
 
-Kết quả **khớp 100%** với con số Claude hiển thị trong Settings → Usage.
-
 > Lần đầu chạy, macOS hỏi quyền truy cập Keychain → chọn **Always Allow**.
 
 ### 2. Web Cookie (cho web user)
 
-Dành cho người không cài Claude Code. Nhập `sessionKey` cookie từ claude.ai qua menu **Set Session Cookie...** — app dùng Web API thay OAuth. Nếu Web API lỗi, tự fallback về OAuth.
+Dành cho người không cài Claude Code. Thêm account với source `WebCookie` và paste `sessionKey` cookie từ claude.ai. Nếu Web API lỗi, log error nhưng không ảnh hưởng các account khác.
 
 ---
 
@@ -193,83 +227,34 @@ Dành cho người không cài Claude Code. Nhập `sessionKey` cookie từ clau
 
 ```
 src/
-├── main.rs           # Entry point, CLI parser, scheduler loop
-├── config.rs         # Đọc/ghi config JSON
-├── aggregator.rs     # Điều phối nguồn dữ liệu, tổng hợp Snapshot
-├── menubar.rs        # Native macOS menu bar UI (objc2 / AppKit)
-├── alert.rs          # Logic cảnh báo, notification, webhook
+├── main.rs           # Entry point, CLI parser, multi-account scheduler loop
+├── config.rs         # Config JSON với accounts array + migration logic
+├── aggregator.rs     # Poll tất cả accounts song song, trả Vec<Snapshot>
+├── menubar.rs        # Native macOS menu bar UI, dynamic account list
+├── alert.rs          # Per-account alert state, notification, webhook
 ├── output.rs         # In terminal + ghi JSON
 └── sources/
-    ├── oauth_api.rs  # Anthropic OAuth usage API
+    ├── oauth_api.rs  # Anthropic OAuth usage API (parameterized keychain)
     └── claude_web.rs # claude.ai Web API (session cookie)
 ```
 
-### `main.rs` — Entry point & scheduler
-
-Xử lý CLI (`status` / `config` / `daemon`). Ở chế độ daemon, app chạy **2 thread song song**:
+### Threading model
 
 ```
 Main thread (AppKit)           Background thread (Tokio async)
         |                               |
-        | <-- Arc<Mutex<MenuBarData>> --| cập nhật % mỗi N giây
+        | <-- Arc<Mutex<MenuBarData>> --| cập nhật tất cả accounts mỗi N giây
         | <-- mpsc::channel<Notif> -----| yêu cầu gửi notification
-        | ---> tokio::Notify ---------->| Refresh Now / config thay đổi
+        | ---> tokio::Notify ---------->| Refresh Now / account thay đổi
 ```
 
-AppKit bắt buộc phải chạy trên main thread — do đó Tokio runtime được đặt trên background thread riêng.
+### Multi-account flow
 
-### `aggregator.rs` — Điều phối nguồn dữ liệu
-
-Nhận config, chọn nguồn phù hợp, trả về `Snapshot`:
-
-```
-session_cookie có?
-  Có  → thử Web API
-          OK   → DataSource::WebCookie
-          Lỗi  → fallback OAuth
-  Không → OAuth API
-              429 Too Many Requests → tự retry sau 3 phút
-```
-
-### `sources/oauth_api.rs` — OAuth source
-
-1. Chạy `security find-generic-password -s "Claude Code-credentials" -w` để đọc JSON từ Keychain
-2. Parse access token, kiểm tra expiry
-3. `GET /api/oauth/usage` với Bearer token
-4. Parse → `OauthUsageResponse { five_hour, seven_day }`
-
-### `menubar.rs` — Menu bar UI
-
-Dùng **objc2** (Rust bindings cho Objective-C) để tạo native macOS UI:
-
-- `NSStatusItem` hiển thị attributed string 2 dòng (session + weekly)
-- Font **bold** cho % chính, regular cho thời gian reset
-- Màu xanh/cam theo threshold từng dòng độc lập
-- ObjC action handler cho các menu item (Set Cookie, Refresh, Quit...)
-- Event loop dùng `NSApplication.nextEventMatchingMask + sendEvent` — cách đúng để AppKit dispatch mouse events (dropdown mới hoạt động)
-
-### `alert.rs` — Logic cảnh báo
-
-Thuật toán step-based, không spam notification:
-
-```
-threshold = 80%
-[80%–85%) → alert lần 1: "Session at 80.x% used"
-[85%–90%) → alert lần 2: "Session at 85.x% used"
-[90%–95%) → alert lần 3: "Session at 90.x% used"
-pct < 80% → reset trạng thái, sẵn sàng alert lại
-```
-
-Gửi đồng thời macOS notification + Slack/Discord webhook (nếu `webhook_url` được cấu hình).
-
-### `config.rs` — Config
-
-Đọc/ghi `~/.claude/usage-tracker-config.json`. Tự sinh với giá trị mặc định nếu chưa tồn tại. Daemon **reload config mỗi lần poll** — thay đổi có hiệu lực ngay không cần restart.
-
-### `output.rs` — Output
-
-- In snapshot ra stdout có màu ANSI
-- Append snapshot vào file JSON (`output_path`) để tích hợp với tool khác
+1. Daemon reload config mỗi tick → lấy danh sách accounts
+2. `aggregator::snapshot_all()` poll **tất cả accounts song song** (futures::join_all)
+3. Mỗi account thành công → update `MenuBarData.accounts[i]`, write history, check alert
+4. Account lỗi → log error, hiển thị "?" trên menu bar
+5. Menu bar render 1 dòng per account trên status bar title
 
 ---
 
@@ -314,3 +299,5 @@ brew services stop claude-usage-tracker
 | `clap` | CLI argument parsing |
 | `chrono` | Timezone-aware datetime |
 | `tracing` | Structured logging |
+| `uuid` | Unique account IDs |
+| `futures` | Concurrent account polling |

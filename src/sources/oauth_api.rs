@@ -88,15 +88,15 @@ pub struct RateLimit {
 }
 
 /// Read the OAuth access token from macOS Keychain.
-fn read_access_token() -> Result<String> {
+fn read_access_token(service: &str) -> Result<String> {
     let output = Command::new("security")
-        .args(["find-generic-password", "-s", KEYCHAIN_SERVICE, "-w"])
+        .args(["find-generic-password", "-s", service, "-w"])
         .output()
         .context("failed to spawn `security` to read Claude Code credentials")?;
     if !output.status.success() {
         return Err(anyhow!(
             "keychain lookup failed for '{}' (status {}). Is Claude Code logged in?",
-            KEYCHAIN_SERVICE,
+            service,
             output.status
         ));
     }
@@ -118,8 +118,9 @@ fn read_access_token() -> Result<String> {
 }
 
 /// Fetch current usage from Claude's OAuth usage endpoint.
-pub async fn fetch_usage() -> Result<OauthUsageResponse> {
-    let token = read_access_token()?;
+pub async fn fetch_usage(keychain_service: Option<&str>) -> Result<OauthUsageResponse> {
+    let service = keychain_service.unwrap_or(KEYCHAIN_SERVICE);
+    let token = read_access_token(service)?;
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(10))
         .build()?;

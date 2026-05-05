@@ -1,8 +1,8 @@
-use anyhow::Result;
+use anyhow::{anyhow, Result};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
-use crate::config::Config;
+use crate::config::{Account, AccountSource, Config};
 use crate::sources::{claude_web, oauth_api};
 use crate::sources::oauth_api::{OauthUsageResponse, RateLimitedError};
 
@@ -12,6 +12,10 @@ pub struct Snapshot {
     pub session: UsageSummary,
     pub weekly: UsageSummary,
     pub source: DataSource,
+    #[serde(default)]
+    pub account_id: String,
+    #[serde(default)]
+    pub account_name: String,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, Default)]
@@ -39,9 +43,9 @@ fn map_response(resp: OauthUsageResponse) -> (UsageSummary, UsageSummary) {
     (session, weekly)
 }
 
-async fn try_oauth() -> Result<(UsageSummary, UsageSummary)> {
+async fn try_oauth(keychain_service: Option<&str>) -> Result<(UsageSummary, UsageSummary)> {
     loop {
-        match oauth_api::fetch_usage().await {
+        match oauth_api::fetch_usage(keychain_service).await {
             Ok(resp) => return Ok(map_response(resp)),
             Err(ref e) if e.downcast_ref::<RateLimitedError>().is_some() => {
                 tracing::warn!("OAuth 429 — retrying in 3 minutes");
@@ -52,22 +56,50 @@ async fn try_oauth() -> Result<(UsageSummary, UsageSummary)> {
     }
 }
 
-pub async fn snapshot(cfg: &Config) -> Result<Snapshot> {
-    let now_utc = Utc::now();
-
-    // If session_cookie is configured, prefer web API and fall back to OAuth on failure.
-    if let Some(cookie) = &cfg.session_cookie {
-        match claude_web::fetch_usage(cookie).await {
-            Ok(resp) => {
-                let (session, weekly) = map_response(resp);
-                return Ok(Snapshot { captured_at: now_utc, session, weekly, source: DataSource::WebCookie });
-            }
-            Err(e) => {
-                tracing::warn!("Web API failed ({e}), falling back to OAuth");
-            }
+/// Fetch usage for a single account.
+async fn snapshot_one(account: &Account) -> Result<Snapshot> {
+    let now = Utc::now();
+    let (session, weekly, source) = match account.source {
+        AccountSource::WebCookie => {
+            let cookie = account.credential.as_deref()
+                .ok_or_else(|| anyhow!("Account '{}' has no session cookie", account.name))?;
+            let resp = claude_web::fetch_usage(cookie).await?;
+            let (s, w) = map_response(resp);
+            (s, w, DataSource::WebCookie)
         }
-    }
+        AccountSource::OAuth => {
+            let service = account.credential.as_deref();
+            let (s, w) = try_oauth(service).await?;
+            (s, w, DataSource::OAuth)
+        }
+    };
+    Ok(Snapshot {
+        captured_at: now,
+        session,
+        weekly,
+        source,
+        account_id: account.id.clone(),
+        account_name: account.name.clone(),
+    })
+}
 
-    let (session, weekly) = try_oauth().await?;
-    Ok(Snapshot { captured_at: now_utc, session, weekly, source: DataSource::OAuth })
+/// Poll all accounts concurrently. Returns results keyed by account id.
+pub async fn snapshot_all(cfg: &Config) -> Vec<(Account, Result<Snapshot>)> {
+    let futs: Vec<_> = cfg.accounts.iter().map(|acc| {
+        let acc = acc.clone();
+        async move {
+            let result = snapshot_one(&acc).await;
+            (acc, result)
+        }
+    }).collect();
+    futures::future::join_all(futs).await
+}
+
+/// Single-account snapshot (for `status` subcommand backward compat)
+pub async fn snapshot(cfg: &Config) -> Result<Snapshot> {
+    if let Some(acc) = cfg.accounts.first() {
+        snapshot_one(acc).await
+    } else {
+        Err(anyhow!("No accounts configured"))
+    }
 }
